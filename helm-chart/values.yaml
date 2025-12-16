@@ -1,0 +1,84 @@
+replicaCount: 2
+
+image:
+  repository: agentic-defense
+  pullPolicy: IfNotPresent
+  tag: "2.0.0"
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext: {}
+
+securityContext: {}
+
+service:
+  type: ClusterIP
+  port: 8000
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: agentic-defense.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Configuration
+config:
+  graphDbType: "neo4j"
+  neo4jUri: "bolt://neo4j-service:7687"
+  neo4jUser: "neo4j"
+  neo4jPassword: "password"
+  
+  messageQueueType: "kafka"
+  kafkaBootstrapServers: "kafka-service:9092"
+  
+  vaultType: "vault"
+  vaultAddr: "http://vault-service:8200"
+
+# Neo4j dependency
+neo4j:
+  enabled: true
+  auth:
+    neo4j:
+      password: "password"
+
+# Kafka dependency
+kafka:
+  enabled: true
+
+# Vault dependency
+vault:
+  enabled: true
+
