@@ -15,24 +15,29 @@ logger = structlog.get_logger(__name__)
 
 
 class ConnectorScheduler:
-    """Scheduler for managing connector polling intervals"""
+    """
+    Scheduler for managing periodic connector polling.
+    
+    Uses `APScheduler` to trigger connector fetch jobs either on a fixed interval or via cron expressions.
+    Integrates with `ConnectorCircuitBreaker` to wrap all jobs with resilience logic.
+    """
     
     def __init__(self):
         self.scheduler = AsyncIOScheduler()
-        self.jobs: Dict[str, str] = {}  # connector_id -> job_id
+        self.jobs: Dict[str, str] = {}  # Map of connector_id -> apscheduler job_id
         self.circuit_breakers: Dict[str, ConnectorCircuitBreaker] = {}
         self.logger = logger
         self._running = False
     
     def start(self) -> None:
-        """Start the scheduler"""
+        """Start the async scheduler if not already running."""
         if not self._running:
             self.scheduler.start()
             self._running = True
             self.logger.info("Scheduler started")
     
     def stop(self) -> None:
-        """Stop the scheduler"""
+        """Stop the scheduler and all active jobs."""
         if self._running:
             self.scheduler.shutdown()
             self._running = False
@@ -46,13 +51,15 @@ class ConnectorScheduler:
         cron_expression: Optional[str] = None
     ) -> None:
         """
-        Schedule a connector for periodic fetching
+        Schedule a connector for periodic data fetching.
+        
+        Wraps the fetch function in a circuit breaker before scheduling to prevent cascading failures.
         
         Args:
-            connector_id: Unique identifier for the connector
-            fetch_func: Async function to call for fetching
-            interval_seconds: Polling interval in seconds (default from config)
-            cron_expression: Optional cron expression for custom scheduling
+            connector_id: Unique identifier for the connector.
+            fetch_func: Async callable that performs the data fetch.
+            interval_seconds: Polling frequency in seconds (default: 300s).
+            cron_expression: Optional Cron-style string (e.g., "0 * * * *") for complex schedules.
         """
         if connector_id in self.jobs:
             self.unschedule_connector(connector_id)
@@ -122,7 +129,12 @@ class ConnectorScheduler:
         """Manually trigger a connector fetch immediately"""
         self.logger.info("Manual trigger requested", connector_id=connector_id)
         try:
-            await fetch_func()
+            if connector_id not in self.circuit_breakers:
+                self.circuit_breakers[connector_id] = ConnectorCircuitBreaker(name=f"cb_{connector_id}")
+            
+            circuit_breaker = self.circuit_breakers[connector_id]
+            await circuit_breaker.call(fetch_func)
+            self.logger.info("Manual trigger executed successfully", connector_id=connector_id)
         except Exception as e:
             self.logger.error("Manual trigger failed", connector_id=connector_id, error=str(e))
             raise ConnectorError(f"Manual trigger failed: {e}")

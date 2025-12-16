@@ -22,7 +22,15 @@ logger = get_logger(__name__)
 
 
 class UniversalAgenticFabric:
-    """Main orchestration class for the Universal Agentic Fabric"""
+    """
+    Main orchestration class for the Universal Agentic Fabric.
+    
+    Responsibilities:
+    1. Integration: Initialize connectors, scheduler, and message queues.
+    2. Normalization: Route incoming alerts through the Transformation Engine.
+    3. Contextualization: Store normalized data in the Graph DB.
+    4. Agency: periodic risk analysis and autonomous decision making via the State Machine.
+    """
     
     def __init__(self):
         self.logger = logger
@@ -34,7 +42,13 @@ class UniversalAgenticFabric:
         self.consumer_running = False
     
     async def initialize(self):
-        """Initialize the fabric"""
+        """
+        Initialize all fabric components.
+        
+        - Loads connectors from the registry.
+        - Starts the job scheduler.
+        - Initializes Kafka Consumer and Producer (DLQ) if configured.
+        """
         self.logger.info("Initializing Universal Agentic Fabric")
         
         # Load connectors
@@ -50,6 +64,8 @@ class UniversalAgenticFabric:
         self.logger.info("Fabric initialized", connectors=len(registry.list_connectors()))
 
         # Initialize Kafka Consumer if configured
+        self.producer = None  # Kafka producer for DLQ
+        
         if settings.message_queue_type == "kafka" and settings.kafka_bootstrap_servers:
             try:
                 self.consumer = AIOKafkaConsumer(
@@ -59,17 +75,27 @@ class UniversalAgenticFabric:
                     enable_auto_commit=False,  # Manual commit for at-least-once delivery
                     auto_offset_reset="earliest"
                 )
-                self.logger.info("Kafka consumer initialized", topic=settings.kafka_topic)
+                # Initialize producer for DLQ
+                from aiokafka import AIOKafkaProducer
+                self.producer = AIOKafkaProducer(
+                    bootstrap_servers=settings.kafka_bootstrap_servers
+                )
+                self.logger.info("Kafka consumer/producer initialized", topic=settings.kafka_topic, dlq=settings.kafka_dlq_topic)
             except Exception as e:
-                self.logger.error("Failed to initialize Kafka consumer", error=str(e))
+                self.logger.error("Failed to initialize Kafka client", error=str(e))
     
     async def process_alert(self, connector_id: str, alert_data: Dict[str, Any]):
         """
-        Process a single alert through the entire pipeline
+        Process a single alert through the intake pipeline.
+        
+        Pipeline Steps:
+        1. Identify source connector.
+        2. Transform (Normalize) to OCSF format.
+        3. Contextualize (Ingest) into Graph Nodes.
         
         Args:
-            connector_id: ID of the connector that fetched the alert
-            alert_data: Raw alert data from connector
+            connector_id: ID of the connector that fetched the alert.
+            alert_data: Raw alert dictionary from the vendor.
         """
         try:
             # Step 1: Get connector to identify source
@@ -131,7 +157,15 @@ class UniversalAgenticFabric:
         self.logger.info("Output adapter registered", adapter=name)
     
     async def consume_messages(self):
-        """Consume messages from Kafka"""
+        """
+        Continuous loop to consume messages from Kafka.
+        
+        Handles:
+        - Message decoding.
+        - Routing to `process_alert`.
+        - Error handling and forwarding to Dead Letter Queue (DLQ).
+        - Manual offset committing to ensure at-least-once processing.
+        """
         if not self.consumer:
             self.logger.warning("Consumer not initialized, skipping consumption loop")
             return
@@ -161,9 +195,36 @@ class UniversalAgenticFabric:
                     
                 except json.JSONDecodeError:
                     self.logger.error("Failed to decode message", offset=msg.offset)
+                    # Commit offset for malformed messages to avoid getting stuck
+                    await self.consumer.commit()
                 except Exception as e:
                     self.logger.error("Error processing message", error=str(e), offset=msg.offset)
-                    # Decide whether to commit or retry here. For now, we log and continue.
+                    # Send to DLQ
+                    if self.producer and settings.kafka_dlq_topic:
+                        try:
+                            dlq_payload = {
+                                "original_message": msg.value.decode('utf-8', errors='ignore'),
+                                "error": str(e),
+                                "timestamp": datetime.now().isoformat(),
+                                "topic": msg.topic,
+                                "partition": msg.partition,
+                                "offset": msg.offset
+                            }
+                            await self.producer.send_and_wait(
+                                settings.kafka_dlq_topic, 
+                                json.dumps(dlq_payload).encode('utf-8')
+                            )
+                            self.logger.info("Message sent to DLQ", dlq_topic=settings.kafka_dlq_topic, offset=msg.offset)
+                            # Commit offset so we don't get stuck on this message forever
+                            await self.consumer.commit()
+                        except Exception as dlq_error:
+                            self.logger.critical("Failed to send to DLQ", error=str(dlq_error), original_offset=msg.offset)
+                            # If DLQ fails, we still commit the original message to avoid reprocessing indefinitely
+                            await self.consumer.commit()
+                    else:
+                        # If no DLQ, logic depends on policy. Here we log and commit to avoid block loop.
+                        self.logger.warning("DLQ not configured or producer not available, committing offset for failed message to avoid reprocessing.", offset=msg.offset)
+                        await self.consumer.commit()
                     
         except Exception as e:
             self.logger.error("Consumer loop failed", error=str(e))
@@ -179,6 +240,8 @@ class UniversalAgenticFabric:
         scheduler.stop()
         if self.consumer:
             await self.consumer.stop()
+        if self.producer:
+            await self.producer.stop()
         await asyncio.sleep(1)  # Allow pending operations to complete
 
 

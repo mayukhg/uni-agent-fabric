@@ -7,13 +7,26 @@ import asyncio
 from langgraph.graph import StateGraph, END
 from ..layer3_moat.graph_client import get_graph_client
 from ..common.exceptions import GraphDatabaseError
+from ..common.config import settings
 from .iac_parser import IaCParser
+import httpx
 
 logger = structlog.get_logger(__name__)
 
 
 class AgentState(TypedDict):
-    """State for the agentic state machine"""
+    """
+    Typed dictionary representing the shared state in the LangGraph workflow.
+    
+    Attributes:
+        high_risk_nodes: List of graph nodes identified as high risk.
+        iac_risks: List of risks detected in Infrastructure as Code files.
+        risk_scores: Map of object IDs to their calculated risk scores.
+        decisions: List of final decisions/actions taken for each object.
+        reasoning_log: Human-readable log of the agent's thought process.
+        source_attribution: Map tracking where each risk originated (e.g., 'tenable', 'iac').
+        threshold: The risk score threshold triggering automated action.
+    """
     high_risk_nodes: List[Dict[str, Any]]
     iac_risks: List[Dict[str, Any]]
     risk_scores: Dict[str, int]
@@ -24,7 +37,16 @@ class AgentState(TypedDict):
 
 
 class RiskDetectionStateMachine:
-    """LangGraph state machine for detecting and responding to high-risk objects"""
+    """
+    LangGraph-based state machine that orchestrates the risk detection and response workflow.
+    
+    Workflow Steps:
+    1. Query Graph: Find high-risk assets/findings in the graph DB.
+    2. Scan IaC: Check static infrastructure files for misconfigurations.
+    3. Analyze Risks: specific logic to normalize scores.
+    4. Make Decisions: Call OPA (Open Policy Agent) to decide on actions (Remediate, Approval, etc.).
+    5. Log Reasoning: Audit trail of why decisions were made.
+    """
     
     def __init__(self, threshold: int = 7, iac_path: str = "./terraform"):
         self.graph_client = get_graph_client()
@@ -57,9 +79,12 @@ class RiskDetectionStateMachine:
         return workflow.compile()
     
     async def _query_graph_node(self, state: AgentState) -> AgentState:
-        """Query graph database for high-risk nodes"""
-    async def _query_graph_node(self, state: AgentState) -> AgentState:
-        """Query graph database for high-risk nodes"""
+        """
+        Step 1: Query the graph database for existing high-risk nodes.
+        
+        Uses the `last_cycle_time` to fetch only net-new or updated nodes since the last run.
+        Populates `state["high_risk_nodes"]`.
+        """
         current_time = datetime.now().timestamp()
         self.logger.info("Querying graph for high-risk nodes", threshold=self.threshold, last_cycle_time=self.last_cycle_time)
         
@@ -144,20 +169,26 @@ class RiskDetectionStateMachine:
             if risk_score >= self.threshold:
                 source = state["source_attribution"].get(node_id, "unknown")
                 
-                # SAFETY RAIL: Critical risks require human approval
-                if risk_score >= 9:
-                    action = "PENDING_APPROVAL"
-                    description = f"High risk detected (Score: {risk_score}). Source: {source}"
-                    op_id = approval_manager.request_approval(
+                # Call OPA for policy decision
+                policy_result = await self._check_opa_policy(node_id, source, risk_score)
+                action = policy_result.get("action", "investigate")
+                
+                # Enforce approval if OPA requires it
+                if action == "PENDING_APPROVAL" or policy_result.get("require_approval", False):
+                     action = "PENDING_APPROVAL"
+                     description = f"High risk detected (Score: {risk_score}). Source: {source}. Policy: {policy_result.get('reason', 'Policy required approval')}"
+                     op_id = approval_manager.request_approval(
                         risk_score=risk_score,
                         description=description,
                         action_type="remediate",
                         target=node_id,
-                        metadata={"source": source}
-                    )
-                    self.logger.warning("Safety Guardrail Triggered", node_id=node_id, op_id=op_id)
-                else:
-                    action = "remediate" if risk_score >= 8 else "investigate"
+                        metadata={"source": source, "policy_result": policy_result}
+                     )
+                     self.logger.warning("Safety Guardrail Triggered (OPA)", node_id=node_id, op_id=op_id)
+                elif action == "deny":
+                    # If policy strictly denies, we might just log or set to manual investigation
+                    action = "investigate"
+                    self.logger.info("Policy denied automated action", node_id=node_id)
                 
                 decision = {
                     "node_id": node_id,
@@ -165,6 +196,7 @@ class RiskDetectionStateMachine:
                     "action": action,
                     "source": source,
                     "timestamp": datetime.now().isoformat(),
+                    "policy": policy_result
                 }
                 decisions.append(decision)
                 
@@ -178,6 +210,38 @@ class RiskDetectionStateMachine:
         
         state["decisions"] = decisions
         return state
+
+    async def _check_opa_policy(self, node_id: str, source: str, risk_score: int) -> Dict[str, Any]:
+        """Query OPA for decision"""
+        try:
+            input_data = {
+                "input": {
+                    "risk_score": risk_score,
+                    "source": source,
+                    "resource_id": node_id,
+                    "timestamp": datetime.now().timestamp()
+                }
+            }
+            
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                response = await client.post(settings.opa_url, json=input_data)
+                if response.status_code == 200:
+                    result = response.json().get("result", {})
+                    # Default policy structure assumption: { "allow": bool, "action": str, "require_approval": bool }
+                    return result
+                else:
+                    self.logger.warning("OPA query failed", status=response.status_code)
+                    # Fallback to safe default
+        except Exception as e:
+            self.logger.error("OPA connection failed, using fallback", error=str(e))
+            
+        # Fallback Logic (Replica of original hardcoded logic)
+        if risk_score >= 9:
+             return {"action": "PENDING_APPROVAL", "require_approval": True, "reason": "Fallback: High Risk"}
+        elif risk_score >= 8:
+             return {"action": "remediate", "require_approval": False}
+        else:
+             return {"action": "investigate", "require_approval": False}
     
     async def _log_reasoning_node(self, state: AgentState) -> AgentState:
         """Generate reasoning log with source attribution"""

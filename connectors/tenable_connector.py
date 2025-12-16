@@ -22,9 +22,18 @@ class TenableConnector(BaseConnector):
         )
     
     async def authenticate(self) -> bool:
-        """Authenticate with Tenable API"""
+        """Authenticate with Tenable API, with dynamic secret fetching"""
         try:
+            # Try with current keys first
+            await self._update_client_headers()
             response = await self.client.get("/scans")
+            
+            if response.status_code == 401 and self.secrets_manager:
+                self.logger.info("Authentication failed, attempting to refresh secrets")
+                await self._refresh_secrets()
+                await self._update_client_headers()
+                response = await self.client.get("/scans")
+                
             if response.status_code == 200:
                 self._authenticated = True
                 self.logger.info("Tenable authentication successful")
@@ -34,6 +43,28 @@ class TenableConnector(BaseConnector):
         except Exception as e:
             self.logger.error("Tenable authentication error", error=str(e))
             raise AuthenticationError(f"Failed to authenticate: {e}")
+
+    async def _refresh_secrets(self):
+        """Fetch secrets from manager"""
+        if not self.secrets_manager:
+            return
+
+        # key mapping strategy: assume config has the secret key name/path
+        # e.g. config["api_key_path"] = "tenable/api_key"
+        api_key_path = self.config.get("api_key_path") or "tenable/api_key"
+        secret_key_path = self.config.get("secret_key_path") or "tenable/secret_key"
+        
+        new_api = await self.secrets_manager.get_secret(api_key_path)
+        new_secret = await self.secrets_manager.get_secret(secret_key_path)
+        
+        if new_api:
+            self.api_key = new_api
+        if new_secret:
+            self.secret_key = new_secret
+            
+    async def _update_client_headers(self):
+        """Update client headers with current keys"""
+        self.client.headers["X-ApiKeys"] = f"accessKey={self.api_key};secretKey={self.secret_key}"
     
     async def fetch(self, since: Optional[datetime] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """Fetch vulnerability data from Tenable"""

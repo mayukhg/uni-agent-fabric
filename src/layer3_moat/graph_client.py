@@ -17,11 +17,25 @@ logger = structlog.get_logger(__name__)
 
 
 class GraphClient(ABC):
-    """Abstract base class for graph database clients"""
+    """
+    Abstract base class defining the interface for graph database interactions.
+    
+    This layer of abstraction allows the application to switch between Neo4j and Amazon Neptune
+    (or other graph DBs) without changing business logic in upper layers.
+    """
     
     @abstractmethod
     async def create_node(self, label: str, properties: Dict[str, Any]) -> str:
-        """Create a node and return its ID"""
+        """
+        Create a new node with a specific label and properties.
+        
+        Args:
+            label: The primary label/tag for the node (e.g., 'Asset', 'Finding').
+            properties: Dictionary of key-value pairs to store on the node.
+            
+        Returns:
+            str: The unique identifier (ID) of the created node.
+        """
         pass
     
     @abstractmethod
@@ -58,7 +72,12 @@ class GraphClient(ABC):
 
 
 class Neo4jClient(GraphClient):
-    """Neo4j graph database client"""
+    """
+    Neo4j implementation using the official `neo4j` async driver.
+    
+    Executes Cypher queries directly against the database.
+    Suitable for local development or on-premise deployments.
+    """
     
     def __init__(self):
         try:
@@ -163,7 +182,15 @@ def get_graph_client() -> GraphClient:
     db_type = settings.graph_db_type.lower()
     
 class NeptuneClient(GraphClient):
-    """Amazon Neptune graph database client using Gremlin"""
+    """
+    Amazon Neptune implementation using `gremlinpython`.
+    
+    Uses the Gremlin Traversal Language (Bytecode) for interactions.
+    
+    Security Note:
+        - Raw string query execution is intentionally DISABLED to prevent validation/injection attacks.
+        - All queries must be constructed using the Traversal API (`self.g.V()...`).
+    """
     
     def __init__(self):
         try:
@@ -234,17 +261,12 @@ class NeptuneClient(GraphClient):
     async def query(self, query: str, parameters: Optional[Dict] = None) -> List[Dict[str, Any]]:
         """
         Execute a Gremlin query (passed as string)
-        Note: This is risky for injection. In production, use traversal object builder methods.
-        For this interface which expects string query, we might need to rely on the client sending Gremlin script.
+        
+        WARNING: Raw Gremlin string execution is disabled for security reasons (Injection Risk).
+        This method will raise an error for Neptune.
         """
-        try:
-            # Sending script to server
-            result_set = self.remote_connection.submit(query, bindings=parameters)
-            results = result_set.all().result()
-            return [dict(r) for r in results]
-        except Exception as e:
-            self.logger.error("Query failed", error=str(e))
-            raise GraphDatabaseError(f"Neptune query failed: {e}")
+        self.logger.error("Attempted to execute raw Gremlin query", query=query)
+        raise GraphDatabaseError("Raw Gremlin/string queries are disabled for security. Use the Traversal API (bytecode) instead.")
 
     async def find_high_risk_nodes(self, threshold: int = 7, time_window: Optional[float] = None) -> List[Dict[str, Any]]:
         """Find nodes with high risk scores using Traversal API"""

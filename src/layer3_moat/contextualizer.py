@@ -9,7 +9,13 @@ logger = structlog.get_logger(__name__)
 
 
 class Contextualizer:
-    """Service for contextualizing and storing data in the graph"""
+    """
+    Service responsible for ingesting normalized OCSF data into the graph.
+    
+    This component acts as the bridge between the Normalization Layer and the Moat Layer.
+    It understands OCSF semantics (Vulnerability, Finding, Asset) and translates them
+    into graph nodes and relationships (HAS_VULNERABILITY, AFFECTED_BY, etc.).
+    """
     
     def __init__(self, graph_client: Optional[GraphClient] = None):
         self.graph = graph_client or get_graph_client()
@@ -17,13 +23,18 @@ class Contextualizer:
     
     async def ingest_ocsf_data(self, ocsf_data: Dict[str, Any]) -> str:
         """
-        Ingest OCSF data into the graph database with context
+        Main entry point for data ingestion.
+        
+        Routes data to specific handlers based on the OCSF `class_uid`.
         
         Args:
-            ocsf_data: OCSF-formatted data dictionary
+            ocsf_data: Normalized OCSF dictionary.
             
         Returns:
-            Node ID in the graph
+            str: The internal ID of the primary node created/updated in the graph.
+            
+        Raises:
+            GraphDatabaseError: If ingestion fails at the database level.
         """
         class_uid = ocsf_data.get("class_uid")
         source = ocsf_data.get("metadata", {}).get("source", "unknown")
@@ -107,7 +118,13 @@ class Contextualizer:
         return await self._ensure_asset(asset_data)
     
     async def _ensure_asset(self, asset_data: Dict[str, Any]) -> str:
-        """Ensure asset exists, create if not"""
+        """
+        Idempotently create or retrieve an Asset node.
+        
+        This is critical for linking findings to the correct resource.
+        It first checks for an existing node matching `name` and `hostname`.
+        If found, returns that ID; otherwise, creates a new node.
+        """
         # Check if asset already exists
         query = (
             "MATCH (a:Asset {name: $name, hostname: $hostname}) "

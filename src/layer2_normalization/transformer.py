@@ -24,18 +24,42 @@ from .strategies import (
     AwsSecurityHubStrategy,
     CrowdStrikeStrategy,
     QualysStrategy,
-    AzureSentinelStrategy
+    AzureSentinelStrategy,
+    ConfigurableStrategy
 )
+import os
 
 logger = structlog.get_logger(__name__)
 
 
 class TransformationEngine:
-    """Engine for transforming vendor data to OCSF format"""
+    """
+    Engine for transforming vendor-specific security data into OCSF format.
+    
+    This engine manages a collection of `TransformationStrategy` implementations.
+    It supports both hardcoded strategies (for standard vendors) and dynamic YAML-based 
+    strategies loaded from `config/mappings/`.
+    
+    Attributes:
+        transformers (Dict[str, TransformationStrategy]): Registry of loaded strategies.
+    """
     
     def __init__(self):
         self.logger = logger
-        self.transformers = {
+        self.transformers = {}
+        self._load_strategies()
+        
+    def _load_strategies(self):
+        """
+        Load transformation strategies with precedence: YAML > Default.
+        
+        1. Defines default hardcoded strategies.
+        2. Scans `config/mappings/` for YAML files to create `ConfigurableStrategy` instances.
+        3. Registers defaults only if a YAML strategy for that source doesn't exist.
+        """
+        # 1. Load Hardcoded Strategies (Definitions)
+        # We define them here but might overwrite if YAML exists
+        defaults = {
             "tenable": TenableStrategy(),
             "splunk": SplunkStrategy(),
             "aws_security_hub": AwsSecurityHubStrategy(),
@@ -43,20 +67,42 @@ class TransformationEngine:
             "azure_sentinel": AzureSentinelStrategy(),
             "qualys": QualysStrategy(),
         }
+        
+        # 2. Check for YAML configurations
+        mapping_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config", "mappings")
+        
+        if os.path.exists(mapping_dir):
+            for filename in os.listdir(mapping_dir):
+                if filename.endswith(".yaml") or filename.endswith(".yml"):
+                    source_name = os.path.splitext(filename)[0]
+                    config_path = os.path.join(mapping_dir, filename)
+                    try:
+                        self.transformers[source_name] = ConfigurableStrategy(config_path)
+                        self.logger.info("Loaded YAML strategy", source=source_name)
+                    except Exception as e:
+                        self.logger.error("Failed to load YAML strategy", source=source_name, error=str(e))
+        
+        # 3. Fill missing with defaults
+        for source, strategy in defaults.items():
+            if source not in self.transformers:
+                self.transformers[source] = strategy
+                self.logger.info("Loaded default strategy", source=source)
     
     async def transform(self, source: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Transform vendor-specific data to OCSF format
+        Transform raw vendor data into the OCSF schema.
+        
+        Delegates the actual transformation to the registered strategy for the given source.
         
         Args:
-            source: Source connector name
-            data: Raw vendor data
+            source: Source identifier (e.g., 'tenable', 'splunk'). Case-insensitive.
+            data: Raw dictionary containing the vendor finding/alert.
             
         Returns:
-            OCSF-formatted data dictionary
+            Dict[str, Any]: OCSF-compliant dictionary (e.g., Finding, VulnerabilityFinding).
             
         Raises:
-            NormalizationError: If transformation fails
+            NormalizationError: If no strategy is found or the transformation fails.
         """
         transformer = self.transformers.get(source.lower())
         if not transformer:

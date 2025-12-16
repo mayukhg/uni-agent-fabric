@@ -8,7 +8,16 @@ logger = structlog.get_logger(__name__)
 
 
 class RiskScoringEngine:
-    """Universal risk scoring engine for OCSF data"""
+    """
+    Universal risk scoring engine for normalized OCSF data.
+    
+    Calculates a consistent risk score (0-10) regardless of the data source (Tenable, Splunk, etc.).
+    Factors considered:
+    - Base severity (Critical, High, etc.)
+    - Vulnerability details (CVE, Exploit availability)
+    - Finding context (Keywords like "ransomware")
+    - Temporal decay (older alerts get lower scores)
+    """
     
     def __init__(self):
         self.logger = logger

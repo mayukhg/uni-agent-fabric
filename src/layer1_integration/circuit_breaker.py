@@ -21,14 +21,15 @@ class ConnectorCircuitBreaker:
         timeout: Optional[int] = None,
         expected_exception: type = Exception
     ):
+
         """
-        Initialize circuit breaker
+        Initialize circuit breaker.
         
         Args:
-            name: Name identifier for the circuit breaker
-            failure_threshold: Number of failures before opening circuit
-            timeout: Time in seconds before attempting to close circuit
-            expected_exception: Exception type that counts as failure
+            name: Identifier for logging and metrics.
+            failure_threshold: Consecutive failures allowed before tripping (default: 5).
+            timeout: Recovery timeout in seconds before attempting partial close (Half-Open).
+            expected_exception: Exception type to catch as failure (default: Exception).
         """
         self.name = name
         self.failure_threshold = failure_threshold or settings.circuit_breaker_failure_threshold
@@ -44,18 +45,22 @@ class ConnectorCircuitBreaker:
     
     async def call(self, func: Callable, *args, **kwargs):
         """
-        Execute a function with circuit breaker protection
+        Execute a function with circuit breaker protection.
+        
+        If the breaker is open, it immediately raises `CircuitBreakerOpenError`.
+        If the function fails, the failure counter increments.
         
         Args:
-            func: Function to execute
-            *args: Positional arguments
-            **kwargs: Keyword arguments
+            func: The async or sync function to execute.
+            *args: Positional arguments for the function.
+            **kwargs: Keyword arguments for the function.
             
         Returns:
-            Function result
+            The return value of `func` if successful.
             
         Raises:
-            CircuitBreakerOpenError: If circuit is open
+            CircuitBreakerOpenError: If the circuit is currently open due to previous failures.
+            Exception: Whatever exception `func` raises if it fails (and increments counter).
         """
         try:
             if asyncio.iscoroutinefunction(func):
@@ -103,13 +108,15 @@ class RuleBasedFallback:
     
     async def process_alert(self, alert_data: dict) -> dict:
         """
-        Process alert using rule-based logic
+        Process alert using static fallback logic when AI services are unavailable.
+        
+        Calculates a basic risk score based on severity fields.
         
         Args:
-            alert_data: Raw alert data
+            alert_data: Raw dictionary of alert data.
             
         Returns:
-            Processed alert with risk score
+            Alert dictionary enriched with `risk_score` and `processing_method` metadata.
         """
         self.logger.info("Using rule-based fallback", alert_id=alert_data.get("id"))
         

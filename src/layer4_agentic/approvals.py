@@ -7,6 +7,18 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 class PendingOperation(BaseModel):
+    """
+    Data model for an operation requiring human approval.
+    
+    Attributes:
+        id: Unique UUID for the operation.
+        risk_score: The calculated risk score that triggered the approval.
+        description: Human-readable context about the risk.
+        action_type: The proposed automated action (e.g., 'remediate', 'isolate').
+        target: The ID of the asset or resource being targeted.
+        status: Current state ('PENDING', 'APPROVED', 'REJECTED').
+        metadata: Additional context like source system, policy results, etc.
+    """
     id: str
     risk_score: float
     description: str
@@ -18,8 +30,12 @@ class PendingOperation(BaseModel):
 
 class ApprovalsManager:
     """
-    Manages operations requiring human approval.
-    For MVP, uses in-memory storage. In production, use a database.
+    Manager for Human-in-the-Loop (HITL) approval workflows.
+    
+    Stores pending operations that were flagged by the `RiskDetectionStateMachine`.
+    Provides APIs to list, approve, or reject these operations.
+    
+    Note: Currently uses in-memory storage. For production, this must be backed by a persistent DB (Postgres/Redis).
     """
     def __init__(self):
         self._pending: Dict[str, PendingOperation] = {}

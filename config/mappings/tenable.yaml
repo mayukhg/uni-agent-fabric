@@ -1,0 +1,30 @@
+# Tenable Transformation Rules
+rules:
+  - input: severity
+    output: severity_id
+    transform: map_severity
+  - input: severity
+    output: severity
+    transform: lowercase_string
+  - input: cve
+    output: vulnerability.cve
+  - input: name
+    output: vulnerability.name
+  - input: plugin_name
+    output: vulnerability.name # Fallback
+  - input: description
+    output: vulnerability.description
+  - input: plugin_id
+    output: vulnerability.vuln_id
+  - input: timestamp
+    output: time
+    transform: to_timestamp
+  - input: connector_id
+    output: metadata.connector_id
+  - input: raw_data
+    output: metadata.original_data
+
+defaults:
+  class_uid: 2002 # Vulnerability Finding
+  class_name: Vulnerability Finding
+  source: tenable

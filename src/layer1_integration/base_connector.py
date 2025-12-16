@@ -5,6 +5,7 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 import structlog
 from ..common.exceptions import ConnectorError, AuthenticationError
+from .secrets_manager import get_secrets_manager
 
 logger = structlog.get_logger(__name__)
 
@@ -26,44 +27,56 @@ class BaseConnector(ABC):
         self.config = config
         self.logger = logger.bind(connector_id=connector_id, connector_name=connector_name)
         self._authenticated = False
+        try:
+            self.secrets_manager = get_secrets_manager()
+        except Exception as e:
+            self.logger.warning("Secrets manager not available, falling back to config", error=str(e))
+            self.secrets_manager = None
     
     @abstractmethod
     async def authenticate(self) -> bool:
         """
-        Authenticate with the security tool API
+        Authenticate with the security tool API.
+        
+        This method should handle token retrieval, key validation, and setting the internal `_authenticated` flag.
+        Connectors should handle transient authentication errors and log details.
         
         Returns:
-            True if authentication successful, False otherwise
+            True if authentication successful, False otherwise.
             
         Raises:
-            AuthenticationError: If authentication fails
+            AuthenticationError: If credentials are permanently invalid or access is denied.
         """
         pass
     
     @abstractmethod
     async def fetch(self, since: Optional[datetime] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """
-        Fetch alerts/data from the security tool
+        Fetch alerts/data from the security tool.
+        
+        Implementers should handle pagination internally or respect the `limit` argument if provided.
         
         Args:
-            since: Fetch data since this timestamp (for incremental fetching)
-            limit: Maximum number of records to fetch
+            since: Timestamp to filter data for incremental sync. If None, fetch recent or all data depending on policy.
+            limit: Maximum number of records to return in this batch.
             
         Returns:
-            List of raw alert/data dictionaries
+            List of raw data dictionaries (not yet normalized).
             
         Raises:
-            ConnectorError: If fetch operation fails
+            ConnectorError: If network issues or API errors occur during fetch.
         """
         pass
     
     @abstractmethod
     async def health_check(self) -> bool:
         """
-        Check if the connector can connect to the API
+        Check if the connector can connect to the API.
+        
+        A lightweight check (e.g., ping, version check) to verify API connectivity and credential validity.
         
         Returns:
-            True if healthy, False otherwise
+            True if healthy (API reachable and authorized), False otherwise.
         """
         pass
     
@@ -83,17 +96,20 @@ class BaseConnector(ABC):
     
     async def test_connection(self) -> bool:
         """
-        Test the connection by performing authentication and health check
+        Test the connection by performing authentication and health check.
+        
+        This is a convenience method often used during onboarding or configuration validation.
         
         Returns:
-            True if connection is successful
+            True if both authentication and health check pass.
         """
         try:
             auth_result = await self.authenticate()
             if not auth_result:
+                self.logger.warning("Authentication failed during connection test")
                 return False
             return await self.health_check()
         except Exception as e:
-            self.logger.error("Connection test failed", error=str(e))
+            self.logger.error("Connection test experienced an error", error=str(e))
             return False
 

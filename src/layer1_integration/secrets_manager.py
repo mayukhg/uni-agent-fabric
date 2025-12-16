@@ -14,22 +14,50 @@ class SecretsManager(ABC):
     
     @abstractmethod
     async def store_secret(self, key: str, value: str, metadata: Optional[Dict] = None) -> None:
-        """Store a secret"""
+        """
+        Store a secret in the backend.
+        
+        Args:
+            key: Secret identifier (path or name).
+            value: The secret content string.
+            metadata: Optional dictionary of metadata to store alongside the secret.
+        """
         pass
     
     @abstractmethod
     async def get_secret(self, key: str) -> Optional[str]:
-        """Retrieve a secret"""
+        """
+        Retrieve a secret from the backend.
+        
+        Args:
+            key: Secret identifier.
+            
+        Returns:
+            Secret value if found, None otherwise.
+        """
         pass
     
     @abstractmethod
     async def delete_secret(self, key: str) -> None:
-        """Delete a secret"""
+        """
+        Delete a secret from the backend.
+        
+        Args:
+            key: Secret identifier.
+        """
         pass
     
     @abstractmethod
     async def list_secrets(self, prefix: str = "") -> List[str]:
-        """List all secret keys with optional prefix"""
+        """
+        List all secret keys available, optionally filtered by prefix.
+        
+        Args:
+            prefix: Filter keys starting with this string.
+            
+        Returns:
+            List of secret keys.
+        """
         pass
 
 
@@ -158,10 +186,15 @@ class AWSSecretsManager(SecretsManager):
 
 def get_secrets_manager() -> SecretsManager:
     """
-    Factory function to get the appropriate secrets manager based on configuration
+    Factory function to get the appropriate secrets manager based on global configuration.
+    
+    Reads `settings.vault_type` to determine which backend to instantiate.
     
     Returns:
-        SecretsManager instance
+        An instance of a concrete SecretsManager subclass (Vault or AWS).
+        
+    Raises:
+        SecretsManagementError: If the configured vault type is unknown or unimplemented.
     """
     vault_type = settings.vault_type.lower()
     

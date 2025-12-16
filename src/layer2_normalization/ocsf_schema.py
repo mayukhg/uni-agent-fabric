@@ -9,7 +9,12 @@ logger = structlog.get_logger(__name__)
 
 
 class OCSFSeverityID(IntEnum):
-    """OCSF Severity ID enumeration"""
+    """
+    OCSF Severity ID enumeration.
+    
+    Standardized integer values for severity levels across all events.
+    Values range from 0 (Unknown) to 6 (Fatal).
+    """
     UNKNOWN = 0
     INFORMATIONAL = 1
     LOW = 2
@@ -20,7 +25,14 @@ class OCSFSeverityID(IntEnum):
 
 
 class OCSFClassUID(IntEnum):
-    """OCSF Class UID enumeration"""
+    """
+    OCSF Class UID enumeration.
+    
+    Unique identifiers for different event classes.
+    1xxx: System/Asset
+    2xxx: Findings/Vulnerabilities
+    4xxx: Network
+    """
     BASE_EVENT = 1001
     FINDING = 2001
     VULNERABILITY_FINDING = 2002
@@ -32,7 +44,11 @@ class OCSFClassUID(IntEnum):
 
 
 class OCSFBaseEvent(BaseModel):
-    """Base OCSF event structure"""
+    """
+    Base OCSF event structure common to all event types.
+    
+    Contains mandatory fields like class_uid, severity, time, and metadata.
+    """
     class_uid: int = Field(..., description="OCSF class UID")
     class_name: str = Field(..., description="OCSF class name")
     severity_id: int = Field(..., description="OCSF severity ID")
@@ -42,6 +58,7 @@ class OCSFBaseEvent(BaseModel):
     
     @validator("severity_id")
     def validate_severity(cls, v):
+        """Validate that severity_id matches defined OCSFSeverityID enum values."""
         if v not in [s.value for s in OCSFSeverityID]:
             raise ValueError(f"Invalid severity_id: {v}")
         return v
