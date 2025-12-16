@@ -15,6 +15,29 @@ logger = get_logger(__name__)
 
 app = FastAPI(title="Universal Agentic Fabric - Onboarding API", version="2.0.0")
 
+
+@app.on_event("startup")
+async def startup_event():
+    """Load connectors on startup"""
+    try:
+        logger.info("Loading connectors...")
+        
+        # Import connector classes
+        from connectors.splunk_connector import SplunkConnector
+        from connectors.tenable_connector import TenableConnector
+        from connectors.aws_connector import AwsSecurityHubConnector
+        from connectors.crowdstrike_connector import CrowdStrikeConnector
+        
+        # Register with explicit names matching frontend IDs
+        registry.register("splunk", SplunkConnector)
+        registry.register("tenable", TenableConnector)
+        registry.register("aws_security_hub", AwsSecurityHubConnector)
+        registry.register("crowdstrike", CrowdStrikeConnector)
+        
+        logger.info(f"Loaded connectors: {registry.list_connectors()}")
+    except Exception as e:
+        logger.error(f"Failed to load connectors: {e}")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
