@@ -37,8 +37,8 @@ class ConnectorCircuitBreaker:
         
         self.breaker = CircuitBreaker(
             fail_max=self.failure_threshold,
-            timeout_duration=self.timeout,
-            expected_exception=expected_exception,
+            reset_timeout=self.timeout,
+
             listeners=[self._CircuitBreakerListener(self.logger)]
         )
     

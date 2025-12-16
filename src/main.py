@@ -3,7 +3,9 @@
 import asyncio
 from typing import Dict, Any
 import structlog
+import json
 from aiohttp import web
+from aiokafka import AIOKafkaConsumer
 from .common.logging import configure_logging, get_logger
 from .common.config import settings
 from .layer1_integration.connector_registry import registry
@@ -28,6 +30,8 @@ class UniversalAgenticFabric:
         self.fallback = RuleBasedFallback()
         self.output_adapters: Dict[str, Any] = {}
         self.state_machine = RiskDetectionStateMachine(threshold=7)
+        self.consumer = None
+        self.consumer_running = False
     
     async def initialize(self):
         """Initialize the fabric"""
@@ -44,6 +48,20 @@ class UniversalAgenticFabric:
         scheduler.start()
         
         self.logger.info("Fabric initialized", connectors=len(registry.list_connectors()))
+
+        # Initialize Kafka Consumer if configured
+        if settings.message_queue_type == "kafka" and settings.kafka_bootstrap_servers:
+            try:
+                self.consumer = AIOKafkaConsumer(
+                    settings.kafka_topic,
+                    bootstrap_servers=settings.kafka_bootstrap_servers,
+                    group_id="agentic_fabric_v1",
+                    enable_auto_commit=False,  # Manual commit for at-least-once delivery
+                    auto_offset_reset="earliest"
+                )
+                self.logger.info("Kafka consumer initialized", topic=settings.kafka_topic)
+            except Exception as e:
+                self.logger.error("Failed to initialize Kafka consumer", error=str(e))
     
     async def process_alert(self, connector_id: str, alert_data: Dict[str, Any]):
         """
@@ -112,10 +130,55 @@ class UniversalAgenticFabric:
         self.output_adapters[name] = adapter
         self.logger.info("Output adapter registered", adapter=name)
     
+    async def consume_messages(self):
+        """Consume messages from Kafka"""
+        if not self.consumer:
+            self.logger.warning("Consumer not initialized, skipping consumption loop")
+            return
+
+        self.consumer_running = True
+        self.logger.info("Starting message consumption loop")
+        
+        try:
+            await self.consumer.start()
+            async for msg in self.consumer:
+                if not self.consumer_running:
+                    break
+                
+                try:
+                    payload = json.loads(msg.value.decode('utf-8'))
+                    self.logger.info("Received message", partition=msg.partition, offset=msg.offset)
+                    
+                    # Extract connector_id and data from payload
+                    # Expected format: {"connector_id": "...", "data": {...}}
+                    connector_id = payload.get("connector_id", "unknown")
+                    data = payload.get("data", payload)
+                    
+                    await self.process_alert(connector_id, data)
+                    
+                    # Manual commit after successful processing
+                    await self.consumer.commit()
+                    
+                except json.JSONDecodeError:
+                    self.logger.error("Failed to decode message", offset=msg.offset)
+                except Exception as e:
+                    self.logger.error("Error processing message", error=str(e), offset=msg.offset)
+                    # Decide whether to commit or retry here. For now, we log and continue.
+                    
+        except Exception as e:
+            self.logger.error("Consumer loop failed", error=str(e))
+        finally:
+            if self.consumer:
+                await self.consumer.stop()
+            self.logger.info("Consumer stopped")
+
     async def shutdown(self):
         """Shutdown the fabric"""
         self.logger.info("Shutting down Universal Agentic Fabric")
+        self.consumer_running = False
         scheduler.stop()
+        if self.consumer:
+            await self.consumer.stop()
         await asyncio.sleep(1)  # Allow pending operations to complete
 
 
@@ -139,6 +202,9 @@ async def start_background_tasks(app):
                 await asyncio.sleep(60)
     
     app['cycle_task'] = asyncio.create_task(run_cycle())
+    
+    # Start consumer task
+    app['consumer_task'] = asyncio.create_task(fabric.consume_messages())
 
 
 async def cleanup_background_tasks(app):
@@ -150,6 +216,14 @@ async def cleanup_background_tasks(app):
             await app['cycle_task']
         except asyncio.CancelledError:
             pass
+            
+    if 'consumer_task' in app:
+        app['consumer_task'].cancel()
+        try:
+            await app['consumer_task']
+        except asyncio.CancelledError:
+            pass
+            
     await fabric.shutdown()
 
 

@@ -9,6 +9,7 @@ from apscheduler.triggers.cron import CronTrigger
 import structlog
 from ..common.config import settings
 from ..common.exceptions import ConnectorError
+from .circuit_breaker import ConnectorCircuitBreaker
 
 logger = structlog.get_logger(__name__)
 
@@ -19,6 +20,7 @@ class ConnectorScheduler:
     def __init__(self):
         self.scheduler = AsyncIOScheduler()
         self.jobs: Dict[str, str] = {}  # connector_id -> job_id
+        self.circuit_breakers: Dict[str, ConnectorCircuitBreaker] = {}
         self.logger = logger
         self._running = False
     
@@ -62,8 +64,21 @@ class ConnectorScheduler:
         else:
             trigger = IntervalTrigger(seconds=interval)
         
+        # Get or create circuit breaker for this connector
+        if connector_id not in self.circuit_breakers:
+            self.circuit_breakers[connector_id] = ConnectorCircuitBreaker(name=f"cb_{connector_id}")
+            
+        circuit_breaker = self.circuit_breakers[connector_id]
+        
+        # Wrap fetch function with circuit breaker
+        async def protected_fetch():
+            try:
+                await circuit_breaker.call(fetch_func)
+            except Exception as e:
+                self.logger.error("Protected fetch failed", connector_id=connector_id, error=str(e))
+        
         job_id = self.scheduler.add_job(
-            func=fetch_func,
+            func=protected_fetch,
             trigger=trigger,
             id=f"connector_{connector_id}",
             replace_existing=True,

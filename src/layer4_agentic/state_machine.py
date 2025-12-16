@@ -3,6 +3,7 @@
 from typing import TypedDict, List, Dict, Any, Optional
 from datetime import datetime
 import structlog
+import asyncio
 from langgraph.graph import StateGraph, END
 from ..layer3_moat.graph_client import get_graph_client
 from ..common.exceptions import GraphDatabaseError
@@ -32,6 +33,7 @@ class RiskDetectionStateMachine:
         self.threshold = threshold
         self.logger = logger
         self.workflow = self._build_workflow()
+        self.last_cycle_time = None
     
     def _build_workflow(self) -> StateGraph:
         """Build the LangGraph workflow"""
@@ -56,10 +58,19 @@ class RiskDetectionStateMachine:
     
     async def _query_graph_node(self, state: AgentState) -> AgentState:
         """Query graph database for high-risk nodes"""
-        self.logger.info("Querying graph for high-risk nodes", threshold=self.threshold)
+    async def _query_graph_node(self, state: AgentState) -> AgentState:
+        """Query graph database for high-risk nodes"""
+        current_time = datetime.now().timestamp()
+        self.logger.info("Querying graph for high-risk nodes", threshold=self.threshold, last_cycle_time=self.last_cycle_time)
         
         try:
-            high_risk_nodes = await self.graph_client.find_high_risk_nodes(self.threshold)
+            high_risk_nodes = await self.graph_client.find_high_risk_nodes(
+                self.threshold, 
+                time_window=self.last_cycle_time
+            )
+            
+            # Update last cycle time on success
+            self.last_cycle_time = current_time
             
             state["high_risk_nodes"] = [
                 {
@@ -81,8 +92,8 @@ class RiskDetectionStateMachine:
         """Scan Infrastructure as Code files for risks"""
         self.logger.info("Scanning IaC files", path=self.iac_path)
         try:
-            # Note: This is synchronous in current implementation
-            iac_risks = self.iac_parser.parse_directory(self.iac_path)
+            # Note: This is synchronous in current implementation, so we offload to thread
+            iac_risks = await asyncio.to_thread(self.iac_parser.parse_directory, self.iac_path)
             state["iac_risks"] = iac_risks
             self.logger.info("IaC scan complete", risk_count=len(iac_risks))
         except Exception as e:

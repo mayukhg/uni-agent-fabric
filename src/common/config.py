@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     # Message Queue
     message_queue_type: str = Field(default="kafka", description="Message queue type: kafka or nats")
     kafka_bootstrap_servers: Optional[str] = Field(default=None, description="Kafka bootstrap servers")
+    kafka_topic: str = Field(default="security_events", description="Kafka topic for ingestion")
     nats_url: Optional[str] = Field(default="nats://localhost:4222", description="NATS server URL")
     
     # Secrets Management
