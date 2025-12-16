@@ -3,6 +3,7 @@
 import asyncio
 from typing import Dict, Any
 import structlog
+from aiohttp import web
 from .common.logging import configure_logging, get_logger
 from .common.config import settings
 from .layer1_integration.connector_registry import registry
@@ -118,26 +119,72 @@ class UniversalAgenticFabric:
         await asyncio.sleep(1)  # Allow pending operations to complete
 
 
+async def health_check(request):
+    """Health check endpoint"""
+    return web.json_response({"status": "healthy", "service": "agentic-fabric"})
+
+
+async def start_background_tasks(app):
+    """Start background agentic cycle"""
+    fabric = app['fabric']
+    await fabric.initialize()
+    
+    async def run_cycle():
+        while True:
+            try:
+                await fabric.run_agentic_cycle()
+                await asyncio.sleep(60)  # Run every minute
+            except Exception as e:
+                logger.error("Agentic cycle error", error=str(e))
+                await asyncio.sleep(60)
+    
+    app['cycle_task'] = asyncio.create_task(run_cycle())
+
+
+async def cleanup_background_tasks(app):
+    """Cleanup background tasks"""
+    fabric = app['fabric']
+    if 'cycle_task' in app:
+        app['cycle_task'].cancel()
+        try:
+            await app['cycle_task']
+        except asyncio.CancelledError:
+            pass
+    await fabric.shutdown()
+
+
+async def create_app():
+    """Create the web application"""
+    app = web.Application()
+    app['fabric'] = UniversalAgenticFabric()
+    
+    # Add routes
+    app.router.add_get('/health', health_check)
+    app.router.add_get('/', health_check)
+    
+    # Setup background tasks
+    app.on_startup.append(start_background_tasks)
+    app.on_cleanup.append(cleanup_background_tasks)
+    
+    return app
+
+
 async def main():
     """Main entry point"""
-    fabric = UniversalAgenticFabric()
+    app = await create_app()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8000)
+    await site.start()
+    logger.info("Agentic Fabric HTTP server started on port 8000")
     
+    # Keep running
     try:
-        await fabric.initialize()
-        
-        # Example: Register output adapters (in production, these would come from config)
-        # slack_adapter = SlackAdapter({"webhook_url": "https://hooks.slack.com/..."})
-        # fabric.register_output_adapter("slack", slack_adapter)
-        
-        # Run agentic cycle periodically
-        while True:
-            await fabric.run_agentic_cycle()
-            await asyncio.sleep(60)  # Run every minute
-            
+        await asyncio.Event().wait()
     except KeyboardInterrupt:
         logger.info("Shutdown requested")
     finally:
-        await fabric.shutdown()
+        await runner.cleanup()
 
 
 if __name__ == "__main__":

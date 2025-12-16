@@ -49,8 +49,8 @@ class OCSFBaseEvent(BaseModel):
 
 class OCSFVulnerabilityFinding(OCSFBaseEvent):
     """OCSF Vulnerability Finding (class_uid: 2002)"""
-    class_uid: int = Field(default=OCSFClassUID.VULNERABILITY_FINDING, const=True)
-    class_name: str = Field(default="Vulnerability Finding", const=True)
+    class_uid: int = Field(default=OCSFClassUID.VULNERABILITY_FINDING)
+    class_name: str = Field(default="Vulnerability Finding")
     vulnerability: Dict[str, Any] = Field(..., description="Vulnerability details")
     asset: Optional[Dict[str, Any]] = Field(None, description="Affected asset")
     src_endpoint: Optional[Dict[str, Any]] = Field(None, description="Source endpoint")
@@ -66,8 +66,8 @@ class OCSFVulnerabilityFinding(OCSFBaseEvent):
 
 class OCSFFinding(OCSFBaseEvent):
     """OCSF Finding (class_uid: 2001)"""
-    class_uid: int = Field(default=OCSFClassUID.FINDING, const=True)
-    class_name: str = Field(default="Finding", const=True)
+    class_uid: int = Field(default=OCSFClassUID.FINDING)
+    class_name: str = Field(default="Finding")
     finding: Dict[str, Any] = Field(..., description="Finding details")
     resources: Optional[List[Dict[str, Any]]] = Field(None, description="Related resources")
     
@@ -81,8 +81,8 @@ class OCSFFinding(OCSFBaseEvent):
 
 class OCSFAssetInventory(OCSFBaseEvent):
     """OCSF Asset Inventory (class_uid: 1001)"""
-    class_uid: int = Field(default=OCSFClassUID.ASSET_INVENTORY, const=True)
-    class_name: str = Field(default="Asset Inventory", const=True)
+    class_uid: int = Field(default=OCSFClassUID.ASSET_INVENTORY)
+    class_name: str = Field(default="Asset Inventory")
     asset: Dict[str, Any] = Field(..., description="Asset details")
     location: Optional[Dict[str, Any]] = Field(None, description="Asset location")
     
@@ -104,17 +104,17 @@ def map_severity_to_ocsf(severity: str) -> int:
     Returns:
         OCSF severity ID
     """
-        severity_lower = severity.lower()
-        mapping = {
-            "critical": OCSFSeverityID.CRITICAL,
-            "high": OCSFSeverityID.HIGH,
-            "medium": OCSFSeverityID.MEDIUM,
-            "low": OCSFSeverityID.LOW,
-            "info": OCSFSeverityID.INFORMATIONAL,
-            "informational": OCSFSeverityID.INFORMATIONAL,
-            "unknown": OCSFSeverityID.UNKNOWN
-        }
-        return mapping.get(severity_lower, OCSFSeverityID.UNKNOWN).value
+    severity_lower = severity.lower()
+    mapping = {
+        "critical": OCSFSeverityID.CRITICAL,
+        "high": OCSFSeverityID.HIGH,
+        "medium": OCSFSeverityID.MEDIUM,
+        "low": OCSFSeverityID.LOW,
+        "info": OCSFSeverityID.INFORMATIONAL,
+        "informational": OCSFSeverityID.INFORMATIONAL,
+        "unknown": OCSFSeverityID.UNKNOWN
+    }
+    return mapping.get(severity_lower, OCSFSeverityID.UNKNOWN).value
 
 
 def get_severity_name(severity_id: int) -> str:

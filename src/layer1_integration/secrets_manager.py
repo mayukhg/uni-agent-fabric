@@ -1,7 +1,7 @@
 """Secrets management for storing and retrieving API credentials"""
 
 from abc import ABC, abstractmethod
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 import structlog
 from ..common.exceptions import SecretsManagementError
 from ..common.config import settings
