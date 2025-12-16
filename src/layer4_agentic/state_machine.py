@@ -6,6 +6,7 @@ import structlog
 from langgraph.graph import StateGraph, END
 from ..layer3_moat.graph_client import get_graph_client
 from ..common.exceptions import GraphDatabaseError
+from .iac_parser import IaCParser
 
 logger = structlog.get_logger(__name__)
 
@@ -13,6 +14,7 @@ logger = structlog.get_logger(__name__)
 class AgentState(TypedDict):
     """State for the agentic state machine"""
     high_risk_nodes: List[Dict[str, Any]]
+    iac_risks: List[Dict[str, Any]]
     risk_scores: Dict[str, int]
     decisions: List[Dict[str, Any]]
     reasoning_log: List[str]
@@ -23,8 +25,10 @@ class AgentState(TypedDict):
 class RiskDetectionStateMachine:
     """LangGraph state machine for detecting and responding to high-risk objects"""
     
-    def __init__(self, threshold: int = 7):
+    def __init__(self, threshold: int = 7, iac_path: str = "./terraform"):
         self.graph_client = get_graph_client()
+        self.iac_parser = IaCParser()
+        self.iac_path = iac_path
         self.threshold = threshold
         self.logger = logger
         self.workflow = self._build_workflow()
@@ -35,13 +39,15 @@ class RiskDetectionStateMachine:
         
         # Add nodes
         workflow.add_node("query_graph", self._query_graph_node)
+        workflow.add_node("scan_iac", self._scan_iac_node)
         workflow.add_node("analyze_risks", self._analyze_risks_node)
         workflow.add_node("make_decisions", self._make_decisions_node)
         workflow.add_node("log_reasoning", self._log_reasoning_node)
         
         # Define edges
         workflow.set_entry_point("query_graph")
-        workflow.add_edge("query_graph", "analyze_risks")
+        workflow.add_edge("query_graph", "scan_iac")
+        workflow.add_edge("scan_iac", "analyze_risks")
         workflow.add_edge("analyze_risks", "make_decisions")
         workflow.add_edge("make_decisions", "log_reasoning")
         workflow.add_edge("log_reasoning", END)
@@ -71,6 +77,19 @@ class RiskDetectionStateMachine:
         
         return state
     
+    async def _scan_iac_node(self, state: AgentState) -> AgentState:
+        """Scan Infrastructure as Code files for risks"""
+        self.logger.info("Scanning IaC files", path=self.iac_path)
+        try:
+            # Note: This is synchronous in current implementation
+            iac_risks = self.iac_parser.parse_directory(self.iac_path)
+            state["iac_risks"] = iac_risks
+            self.logger.info("IaC scan complete", risk_count=len(iac_risks))
+        except Exception as e:
+            self.logger.error("Failed to scan IaC", error=str(e))
+            state["iac_risks"] = []
+        return state
+    
     async def _analyze_risks_node(self, state: AgentState) -> AgentState:
         """Analyze risks and calculate composite scores"""
         self.logger.info("Analyzing risks", node_count=len(state["high_risk_nodes"]))
@@ -78,20 +97,22 @@ class RiskDetectionStateMachine:
         risk_scores = {}
         source_attribution = {}
         
+        # Process Graph Nodes
         for node in state["high_risk_nodes"]:
             node_id = node["node_id"]
             node_data = node["data"]
             
-            # Get base risk score
-            base_score = node_data.get("risk_score", 0)
-            
-            # Calculate composite risk score
             composite_score = self._calculate_composite_risk(node_data, node)
             risk_scores[node_id] = composite_score
             
-            # Track source attribution
             source = node_data.get("source", "unknown")
             source_attribution[node_id] = source
+            
+        # Process IaC Risks
+        for idx, risk in enumerate(state.get("iac_risks", [])):
+            risk_id = f"iac_{idx}_{risk['rule_id']}"
+            risk_scores[risk_id] = risk["risk_score"]
+            source_attribution[risk_id] = f"iac_scanner:{risk['file']}"
         
         state["risk_scores"] = risk_scores
         state["source_attribution"] = source_attribution
@@ -134,6 +155,7 @@ class RiskDetectionStateMachine:
         
         reasoning_log.append(f"Analysis completed at {datetime.now().isoformat()}")
         reasoning_log.append(f"Found {len(state['high_risk_nodes'])} high-risk nodes")
+        reasoning_log.append(f"Found {len(state.get('iac_risks', []))} IaC risks")
         reasoning_log.append(f"Risk threshold: {self.threshold}")
         
         for decision in state["decisions"]:
@@ -187,6 +209,7 @@ class RiskDetectionStateMachine:
         """
         initial_state: AgentState = {
             "high_risk_nodes": [],
+            "iac_risks": [],
             "risk_scores": {},
             "decisions": [],
             "reasoning_log": [],

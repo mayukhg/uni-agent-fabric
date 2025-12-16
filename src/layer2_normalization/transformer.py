@@ -116,30 +116,42 @@ class TransformationEngine:
     
     async def _transform_aws_security_hub(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform AWS Security Hub data to OCSF"""
-        # Placeholder - implement based on AWS Security Hub schema
-        timestamp = datetime.now().timestamp()
-        severity_id = map_severity_to_ocsf(data.get("Severity", {}).get("Label", "unknown"))
+        # Parse timestamp
+        timestamp_str = data.get("timestamp") or data.get("UpdatedAt") or datetime.now().isoformat()
+        try:
+            timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            timestamp = datetime.now().timestamp()
+            
+        severity_id = map_severity_to_ocsf(data.get("severity", "unknown"))
         
         ocsf = OCSFFinding(
             severity_id=severity_id,
             severity=get_severity_name(severity_id),
             time=int(timestamp),
             finding={
-                "title": data.get("Title"),
-                "description": data.get("Description"),
-                "uid": data.get("Id"),
+                "title": data.get("title"),
+                "description": data.get("description"),
+                "uid": data.get("id"),
             },
             metadata={
                 "source": "aws_security_hub",
-                "original_data": data,
+                "original_data": data.get("raw_data", {}),
+                "connector_id": data.get("connector_id"),
+                "product_arn": data.get("raw_data", {}).get("ProductArn"),
             }
         )
         return ocsf.dict()
     
     async def _transform_crowdstrike(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform CrowdStrike data to OCSF"""
-        # Placeholder - implement based on CrowdStrike schema
-        timestamp = datetime.now().timestamp()
+        timestamp = data.get("timestamp") or datetime.now().isoformat()
+        if isinstance(timestamp, str):
+            try:
+                timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp()
+            except Exception:
+                timestamp = datetime.now().timestamp()
+        
         severity_id = map_severity_to_ocsf(data.get("severity", "unknown"))
         
         ocsf = OCSFFinding(
@@ -153,7 +165,8 @@ class TransformationEngine:
             },
             metadata={
                 "source": "crowdstrike",
-                "original_data": data,
+                "original_data": data.get("raw_data", {}),
+                "connector_id": data.get("connector_id"),
             }
         )
         return ocsf.dict()
