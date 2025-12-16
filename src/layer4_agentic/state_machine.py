@@ -121,25 +121,44 @@ class RiskDetectionStateMachine:
         return state
     
     async def _make_decisions_node(self, state: AgentState) -> AgentState:
-        """Make decisions based on risk scores"""
+        """Make decisions based on risk scores with Safety Guardrails"""
         self.logger.info("Making decisions", risk_count=len(state["risk_scores"]))
+        
+        # Import here to avoid circular dependencies if any
+        from .approvals import approval_manager
         
         decisions = []
         
         for node_id, risk_score in state["risk_scores"].items():
             if risk_score >= self.threshold:
                 source = state["source_attribution"].get(node_id, "unknown")
+                
+                # SAFETY RAIL: Critical risks require human approval
+                if risk_score >= 9:
+                    action = "PENDING_APPROVAL"
+                    description = f"High risk detected (Score: {risk_score}). Source: {source}"
+                    op_id = approval_manager.request_approval(
+                        risk_score=risk_score,
+                        description=description,
+                        action_type="remediate",
+                        target=node_id,
+                        metadata={"source": source}
+                    )
+                    self.logger.warning("Safety Guardrail Triggered", node_id=node_id, op_id=op_id)
+                else:
+                    action = "remediate" if risk_score >= 8 else "investigate"
+                
                 decision = {
                     "node_id": node_id,
                     "risk_score": risk_score,
-                    "action": "remediate" if risk_score >= 9 else "investigate",
+                    "action": action,
                     "source": source,
                     "timestamp": datetime.now().isoformat(),
                 }
                 decisions.append(decision)
                 
                 self.logger.warning(
-                    "High-risk decision made",
+                    "Decision made",
                     node_id=node_id,
                     risk_score=risk_score,
                     action=decision["action"],

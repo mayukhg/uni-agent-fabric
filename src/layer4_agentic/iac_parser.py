@@ -2,6 +2,9 @@
 
 import re
 import os
+import shutil
+import tempfile
+import subprocess
 from typing import List, Dict, Any
 import structlog
 
@@ -38,6 +41,28 @@ class IaCParser:
                 "description": "EBS volume is not encrypted"
             }
         ]
+
+    def scan_repository(self, repo_url: str, branch: str = "main") -> List[Dict[str, Any]]:
+        """
+        Clone and scan a remote Git repository
+        """
+        temp_dir = tempfile.mkdtemp()
+        try:
+            self.logger.info("Cloning repository", repo=repo_url, branch=branch)
+            subprocess.check_call(
+                ["git", "clone", "--depth", "1", "--branch", branch, repo_url, temp_dir],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            return self.parse_directory(temp_dir)
+        except subprocess.CalledProcessError as e:
+            self.logger.error("Failed to clone repository", repo=repo_url, error=str(e))
+            return []
+        except Exception as e:
+            self.logger.error("Scan error", error=str(e))
+            return []
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     def parse_directory(self, directory_path: str) -> List[Dict[str, Any]]:
         """

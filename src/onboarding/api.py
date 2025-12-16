@@ -9,11 +9,16 @@ from ..layer1_integration.connector_registry import registry
 from ..layer1_integration.secrets_manager import get_secrets_manager
 from ..layer1_integration.scheduler import scheduler
 from ..common.logging import configure_logging, get_logger
+from ..layer1_integration.webhooks import router as webhook_router
+from ..layer4_agentic.approval_api import router as approval_router
 
 configure_logging()
 logger = get_logger(__name__)
 
 app = FastAPI(title="Universal Agentic Fabric - Onboarding API", version="2.0.0")
+
+app.include_router(webhook_router)
+app.include_router(approval_router)
 
 
 @app.on_event("startup")
