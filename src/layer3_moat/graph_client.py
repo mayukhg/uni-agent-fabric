@@ -66,6 +66,21 @@ class GraphClient(ABC):
         pass
     
     @abstractmethod
+    async def find_shortest_path(self, start_node_id: str, end_node_id: str, max_depth: int = 5) -> List[Dict[str, Any]]:
+        """
+        Find the shortest path between two nodes.
+        
+        Args:
+            start_node_id: ID of the starting node.
+            end_node_id: ID of the target node.
+            max_depth: Maximum number of hops.
+            
+        Returns:
+            List of nodes/relationships in the path.
+        """
+        pass
+
+    @abstractmethod
     async def health_check(self) -> bool:
         """Check database health"""
         pass
@@ -156,6 +171,21 @@ class Neo4jClient(GraphClient):
         query = " ".join(query_parts)
         results = await self.query(query, params)
         return results
+        
+    async def find_shortest_path(self, start_node_id: str, end_node_id: str, max_depth: int = 5) -> List[Dict[str, Any]]:
+        """Find shortest path using Cypher"""
+        query = (
+            "MATCH p = shortestPath((start)-[*..%d]-(end)) "
+            "WHERE id(start) = $start_id AND id(end) = $end_id "
+            "RETURN p"
+        ) % max_depth
+        
+        try:
+            results = await self.query(query, {"start_id": int(start_node_id), "end_id": int(end_node_id)})
+            return results
+        except Exception as e:
+            self.logger.error("Failed to find shortest path", error=str(e))
+            return []
     
     async def health_check(self) -> bool:
         """Check Neo4j connection"""
@@ -317,8 +347,48 @@ class NeptuneClient(GraphClient):
         except Exception:
             return False
             
+    async def find_shortest_path(self, start_node_id: str, end_node_id: str, max_depth: int = 5) -> List[Dict[str, Any]]:
+        """Find shortest path using Gremlin repeat/until"""
+        try:
+            # Note: Gremlin shortest path complex implementation simplification
+            # g.V(start).repeat(both().simplePath()).until(hasId(end).or().loops().is(max)).path()
+            t = self.g.V(start_node_id).repeat(
+                __.both().simplePath()
+            ).until(
+                __.hasId(end_node_id).or_().loops().is_(max_depth)
+            ).path().limit(1)
+            
+            paths = t.toList()
+            results = []
+            for p in paths:
+                # p is a Path object, need to convert to list of dicts
+                for obj in p:
+                    results.append(str(obj)) # Simplification for generic return
+            return results
+        except Exception as e:
+            self.logger.error("Neptune shortest path failed", error=str(e))
+            return []
+
     async def close(self):
         self.remote_connection.close()
+
+class QueryBuilder:
+    """
+    Helper to construct safe Neptune traversals programmatically.
+    
+    This acts as a facade over Gremlin Python to ensure safe parameter usage.
+    """
+    def __init__(self, output: Any):
+        self._traversal = output
+
+    def match_node(self, label: str, properties: Dict[str, Any]):
+        self._traversal = self._traversal.V().hasLabel(label)
+        for k, v in properties.items():
+            self._traversal = self._traversal.has(k, v)
+        return self
+    
+    def build(self):
+        return self._traversal
 
 
 def get_graph_client() -> GraphClient:

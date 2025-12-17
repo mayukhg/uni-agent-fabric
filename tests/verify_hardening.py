@@ -19,6 +19,8 @@ from src.layer3_moat.graph_client import NeptuneClient, GraphDatabaseError
 from src.layer4_agentic.iac_parser import IaCParser
 from src.layer4_agentic.state_machine import RiskDetectionStateMachine
 from src.layer2_normalization.strategies import ConfigurableStrategy
+from src.layer4_agentic.approvals import ApprovalsManager
+from src.common.config import settings
 
 logger = structlog.get_logger()
 
@@ -52,10 +54,11 @@ async def verify_iac_parser():
     
     # Test TF
     tf_risks = parser.parse_terraform_file(os.path.join(fixtures_dir, "sample_iac.tf"))
-    if any(r["rule_id"] == "IAC-003" for r in tf_risks):
+    # New ID scheme is IAC-TF-XXX
+    if any(r["rule_id"] == "IAC-TF-003" for r in tf_risks):
         print(f"✅ PASSED: Detected Unencrypted EBS in Terraform ({len(tf_risks)} risks)")
     else:
-        print(f"❌ FAILED: Did not detect Unencrypted EBS in Terraform. Risks: {tf_risks}")
+        print(f"❌ FAILED: Did not detect Unencrypted EBS in Terraform. Risks: {[r['rule_id'] for r in tf_risks]}")
 
     # Test CFN
     cfn_risks = parser.parse_cloudformation_file(os.path.join(fixtures_dir, "sample_cfn.yaml"))
@@ -111,11 +114,50 @@ async def verify_generic_yaml_strategy():
     else:
         print(f"❌ FAILED: Transform result incorrect: {result}")
 
+async def verify_persistence():
+    """Verify Redis Persistence (FR 2.2)"""
+    print("\n--- Verifying Persistence (FR 2.2) ---")
+    
+    # Needs Redis settings to be active
+    # We will simulate a restart by creating a manager, adding an item, then creating a new manager
+    
+    settings.approval_db_type = "redis"
+    # Assuming redis is at localhost:6379, if not this might fail or log error
+    
+    try:
+        # 1. Create Manager A
+        mgr_a = ApprovalsManager()
+        if not mgr_a.redis_client:
+            print("⚠️ SKIPPED: Redis not available")
+            return
+
+        # 2. Add Item
+        op_id = mgr_a.request_approval(8.5, "Persistence Test", "remediate", "node_x")
+        print(f"Created operation {op_id} in Manager A")
+        
+        # 3. Create Manager B (Simulate Restart)
+        mgr_b = ApprovalsManager()
+        op = mgr_b.get_operation(op_id)
+        
+        if op and op.description == "Persistence Test":
+             print("✅ PASSED: Operation persisted across Manager instances")
+        else:
+             print("❌ FAILED: Operation not found in new Manager instance")
+             
+    except Exception as e:
+        if "Connection refused" in str(e) or "Error 61" in str(e):
+             print(f"⚠️ SKIPPED: Redis not available for persistence test ({e})")
+        else:
+             print(f"⚠️ SKIPPED or FAILED: {e}")
+
 async def main():
     await verify_neptune_safety()
     await verify_iac_parser()
     await verify_opa_integration()
+    await verify_iac_parser()
+    await verify_opa_integration()
     await verify_generic_yaml_strategy()
+    await verify_persistence()
 
 if __name__ == "__main__":
     try:

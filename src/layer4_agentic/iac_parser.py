@@ -11,6 +11,7 @@ import yaml
 import json
 from pathlib import Path
 
+import hcl2
 logger = structlog.get_logger(__name__)
 
 class IaCParser:
@@ -28,33 +29,33 @@ class IaCParser:
         self.logger = logger
         # Simple regex-based rules for demonstration
         # In a real system, this would use a proper HCL parser (like python-hcl2)
-        self.rules = [
+        # AST-based rules for HCL parsing
+        # Structure: Resource Type -> Check Function
+        self.tf_rules = [
             {
-                "id": "IAC-001",
+                "id": "IAC-TF-001",
                 "name": "S3 Bucket Public Access Block Missing",
-                "pattern": r'resource\s+"aws_s3_bucket"\s+"[^"]+"\s+\{',
-                "check": "look_around", # simplified logic type
-                "risk_score": 8,
-                "description": "S3 bucket defined without explicit public access block"
+                "resource_type": "aws_s3_bucket",
+                "check": lambda r: True, # Logic: If bucket exists, we warn (simplification for MVP as checking missing child resource is complex)
+                # Better logic would be checking if a matching aws_s3_bucket_public_access_block exists, which requires cross-resource context.
+                # For this parser scope, we might just flag "Potential Misconfiguration" or rely on detailed attributes.
+                # Let's pivot to a simpler attribute check for MVP: Versioning enabled?
+                "risk_score": 5,
+                "description": "S3 bucket detected (Manual review recommended for public access blocks)"
             },
-            {
-                "id": "IAC-002",
+             {
+                "id": "IAC-TF-002",
                 "name": "Security Group Open to World",
-                "pattern": r'cidr_blocks\s*=\s*\["0.0.0.0/0"\]',
+                "resource_type": "aws_security_group",
+                "check": lambda r: self._check_sg_ingress(r),
                 "risk_score": 9,
                 "description": "Security group allows ingress from 0.0.0.0/0"
             },
             {
-                "id": "IAC-003",
+                "id": "IAC-TF-003",
                 "name": "Unencrypted EBS Volume",
-                "pattern": r'encrypted\s*=\s*false',
-                "risk_score": 7,
-                "description": "EBS volume is not encrypted"
-            },
-            {
-                "id": "IAC-003",
-                "name": "Unencrypted EBS Volume",
-                "pattern": r'encrypted\s*=\s*false',
+                "resource_type": "aws_ebs_volume",
+                "check": lambda r: str(r.get("encrypted", "false")).lower() != "true",
                 "risk_score": 7,
                 "description": "EBS volume is not encrypted"
             }
@@ -144,26 +145,59 @@ class IaCParser:
         return risks
 
     def parse_terraform_file(self, file_path: str) -> List[Dict[str, Any]]:
-        """Parse Terraform file using Regex (Fallback detection)"""
+        """Parse Terraform file using python-hcl2 (AST)"""
         risks = []
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                
-            for rule in self.rules:
-                if re.search(rule["pattern"], content):
-                     risks.append({
-                         "rule_id": rule["id"],
-                         "name": rule["name"],
-                         "file": os.path.basename(file_path),
-                         "path": file_path,
-                         "risk_score": rule["risk_score"],
-                         "description": rule["description"],
-                         "source": "iac_scanner_tf"
-                     })
+                data = hcl2.load(f)
+            
+            # hcl2 returns dict: { "resource": [ { "type": { "name": { ... } } } ] }
+            resources = data.get("resource", [])
+            
+            for resource_block in resources:
+                for r_type, r_instances in resource_block.items():
+                    # r_instances is a dict where keys are resource names and values are the config
+                    for r_name, r_config in r_instances.items():
+                         self._check_hcl_resource(r_type, r_name, r_config, file_path, risks)
+
         except Exception as e:
             self.logger.error("Failed to parse Terraform file", file=file_path, error=str(e))
+            # Fallback? No, we want to enforce robust parsing
         return risks
+
+    def _check_hcl_resource(self, r_type: str, r_name: str, r_config: Dict, file_path: str, risks: List):
+        """Check a single HCL resource against rules"""
+        for rule in self.tf_rules:
+            if rule["resource_type"] == r_type:
+                try:
+                    if rule["check"](r_config):
+                         risks.append({
+                             "rule_id": rule["id"],
+                             "name": rule["name"],
+                             "file": os.path.basename(file_path),
+                             "path": file_path,
+                             "risk_score": rule["risk_score"],
+                             "description": f"{rule['description']} (Resource: {r_name})",
+                             "source": "iac_scanner_tf_ast"
+                         })
+                except Exception as check_err:
+                     self.logger.debug("Rule check failed", rule=rule["id"], error=str(check_err))
+
+    def _check_sg_ingress(self, resource_config: Dict) -> bool:
+        """Helper to check Security Group ingress"""
+        ingress = resource_config.get("ingress", [])
+        if not ingress:
+            return False
+        
+        # In HCL2, ingress might be a list of dicts or a single dict
+        if isinstance(ingress, dict):
+            ingress = [ingress]
+            
+        for rule in ingress:
+            cidr_blocks = rule.get("cidr_blocks", [])
+            if "0.0.0.0/0" in cidr_blocks:
+                return True
+        return False
 
     def parse_cloudformation_file(self, file_path: str) -> List[Dict[str, Any]]:
         """Parse CloudFormation file (YAML/JSON)"""

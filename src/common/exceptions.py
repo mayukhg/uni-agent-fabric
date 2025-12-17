@@ -72,3 +72,11 @@ class CircuitBreakerOpenError(UniversalAgenticFabricError):
     """
     pass
 
+
+class ConfigurationError(UniversalAgenticFabricError):
+    """
+    Configuration error.
+    
+    Raised when required settings are missing or invalid.
+    """
+    pass

@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     aws_region: Optional[str] = Field(default=None, description="AWS region for Secrets Manager")
     azure_keyvault_url: Optional[str] = Field(default=None, description="Azure Key Vault URL")
     
+    # State Persistence (Redis)
+    redis_url: str = Field(default="redis://localhost:6379/0", description="Redis connection URL")
+    approval_db_type: str = Field(default="memory", description="Backend for approvals: memory or redis")
+    approval_redis_key_prefix: str = Field(default="fabric:approvals:", description="Key prefix for approval keys")
+    
     # Performance
     default_polling_interval: int = Field(default=300, description="Default polling interval in seconds (5 minutes)")
     max_retries: int = Field(default=3, description="Maximum retry attempts")
